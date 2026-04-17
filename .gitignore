@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Local dev config that may contain secrets (env vars 우선이지만 fallback 대비)
+**/config.local.json
+.env
+.env.local
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Runtime artifacts
+*.log
+/tmp/
+ai-digest-raw.json
+ai-digest-summary.md
