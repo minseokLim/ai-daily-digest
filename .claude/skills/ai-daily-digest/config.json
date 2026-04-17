@@ -3,11 +3,8 @@
   "lang": "ko",
   "audience": "developers (client/backend/ML)",
   "lab_blog_feeds": [
-    {"name": "Anthropic", "url": "https://www.anthropic.com/news/rss.xml"},
     {"name": "OpenAI", "url": "https://openai.com/blog/rss.xml"},
     {"name": "Google DeepMind", "url": "https://deepmind.google/blog/rss.xml"},
-    {"name": "Meta AI", "url": "https://ai.meta.com/blog/rss/"},
-    {"name": "Mistral", "url": "https://mistral.ai/news/rss.xml"},
     {"name": "HuggingFace Blog", "url": "https://huggingface.co/blog/feed.xml"}
   ],
   "hn_keywords": ["ai", "llm", "gpt", "claude", "gemini", "anthropic", "openai", "deepmind", "mistral", "llama", "deepseek", "transformer", "diffusion", "rag", "agent"],

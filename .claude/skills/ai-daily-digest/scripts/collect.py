@@ -218,6 +218,156 @@ def fetch_lab_blogs(feeds: list[dict], since: datetime) -> list[dict]:
     return items
 
 
+_MONTHS = {"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+           "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12}
+
+
+def _parse_human_date(s: str) -> str | None:
+    """Parse 'Apr 16, 2026' or 'April 16, 2026' -> ISO 8601 UTC. Return None if unparseable."""
+    m = re.search(r"\b([A-Z][a-z]{2,8})\s+(\d{1,2}),\s*(\d{4})\b", s)
+    if not m:
+        return None
+    mon = _MONTHS.get(m.group(1)[:3])
+    if not mon:
+        return None
+    try:
+        dt = datetime(int(m.group(3)), mon, int(m.group(2)), tzinfo=timezone.utc)
+        return dt.isoformat()
+    except Exception:
+        return None
+
+
+def fetch_anthropic_news(since: datetime) -> list[dict]:
+    """Anthropic /news — HTML scrape (no RSS feed available)."""
+    try:
+        html = _http_get("https://www.anthropic.com/news").decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"  [blog:Anthropic] fetch error: {e}", file=sys.stderr)
+        return []
+    items: list[dict] = []
+    seen: set[str] = set()
+    # Each card is an <a href="/news/<slug>" ...>...</a> containing title + <time>.
+    for m in re.finditer(r'<a[^>]*href="(/news/[^"]+)"[^>]*>(.*?)</a>', html, re.DOTALL):
+        slug = m.group(1)
+        if slug in seen:
+            continue
+        block = m.group(2)
+        title_match = re.search(r'<h2[^>]*>([^<]+)</h2>', block) or \
+                      re.search(r'<span[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</span>', block)
+        time_match = re.search(r'<time[^>]*>([^<]+)</time>', block)
+        if not title_match or not time_match:
+            continue
+        pub_iso = _parse_human_date(time_match.group(1))
+        if not _within_window(pub_iso, since):
+            continue
+        seen.add(slug)
+        items.append({
+            "source": "lab_blog",
+            "title": _strip_html(title_match.group(1)),
+            "url": "https://www.anthropic.com" + slug,
+            "published_at": pub_iso,
+            "summary": None,
+            "extra": {"lab": "Anthropic"},
+        })
+    return items
+
+
+def fetch_meta_blog(since: datetime) -> list[dict]:
+    """Meta AI /blog — HTML scrape (no RSS feed available).
+
+    Cards contain an <a href="https://ai.meta.com/blog/<slug>/"> with the title
+    as inner text, followed by a sibling <div> with a 'Mon DD, YYYY' date.
+    """
+    try:
+        html = _http_get("https://ai.meta.com/blog/").decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"  [blog:Meta AI] fetch error: {e}", file=sys.stderr)
+        return []
+    items: list[dict] = []
+    seen: set[str] = set()
+    # Title-text anchors: <a ... href=".../blog/<slug>/">TITLE</a>. The date appears in a
+    # sibling <div> within a few hundred chars after </a> (markup varies between featured
+    # and list cards, so search a window instead of requiring an adjacent tag).
+    anchor_pattern = re.compile(
+        r'<a[^>]*href="(https://ai\.meta\.com/blog/([^/"]+)/)"[^>]*>([^<]{3,})</a>',
+        re.DOTALL,
+    )
+    for m in anchor_pattern.finditer(html):
+        url, slug, title = m.group(1), m.group(2), m.group(3)
+        if slug in seen:
+            continue
+        tail = html[m.end():m.end() + 500]
+        pub_iso = _parse_human_date(tail)
+        if not pub_iso:
+            continue
+        if not _within_window(pub_iso, since):
+            continue
+        seen.add(slug)
+        items.append({
+            "source": "lab_blog",
+            "title": _strip_html(title).strip(),
+            "url": url,
+            "published_at": pub_iso,
+            "summary": None,
+            "extra": {"lab": "Meta AI"},
+        })
+    return items
+
+
+def fetch_mistral_news(since: datetime) -> list[dict]:
+    """Mistral /news — sitemap.xml for URL+lastmod, then per-page fetch for og:title.
+
+    Mistral's news list is client-rendered, so HTML scraping of /news gives nothing.
+    The sitemap lists every news article with a lastmod timestamp we can filter on.
+    """
+    try:
+        raw = _http_get("https://mistral.ai/sitemap.xml")
+    except Exception as e:
+        print(f"  [blog:Mistral] fetch error: {e}", file=sys.stderr)
+        return []
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as e:
+        print(f"  [blog:Mistral] sitemap parse error: {e}", file=sys.stderr)
+        return []
+    ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    candidates: list[tuple[str, str]] = []  # (url, lastmod_iso)
+    for url_el in root.findall("sm:url", ns):
+        loc = (url_el.findtext("sm:loc", default="", namespaces=ns) or "").strip()
+        lastmod = (url_el.findtext("sm:lastmod", default="", namespaces=ns) or "").strip()
+        if "/news/" not in loc:
+            continue
+        # Skip listing pages and non-article paths
+        if loc.rstrip("/").endswith("/news"):
+            continue
+        if not _within_window(lastmod, since):
+            continue
+        candidates.append((loc, lastmod))
+    # Fetch og:title for each candidate (keep small — filter is already tight)
+    items: list[dict] = []
+    for url, pub_iso in candidates[:10]:
+        try:
+            page = _http_get(url).decode("utf-8", errors="replace")
+        except Exception as e:
+            print(f"  [blog:Mistral:{url}] fetch error: {e}", file=sys.stderr)
+            continue
+        tm = re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', page)
+        if not tm:
+            continue
+        title = _strip_html(tm.group(1))
+        # Strip trailing " | Mistral AI" boilerplate
+        title = re.sub(r"\s*\|\s*Mistral AI\s*$", "", title).strip()
+        items.append({
+            "source": "lab_blog",
+            "title": title,
+            "url": url,
+            "published_at": pub_iso,
+            "summary": None,
+            "extra": {"lab": "Mistral"},
+        })
+    return items
+
+
 def fetch_github_trending() -> list[dict]:
     """GitHub Trending (Python, daily). HTML scrape — best-effort."""
     try:
@@ -272,6 +422,9 @@ def main() -> int:
         ("arxiv", lambda: fetch_arxiv(since)),
         ("huggingface", lambda: fetch_huggingface_papers()),
         ("lab_blogs", lambda: fetch_lab_blogs(config["lab_blog_feeds"], since)),
+        ("anthropic_news", lambda: fetch_anthropic_news(since)),
+        ("meta_blog", lambda: fetch_meta_blog(since)),
+        ("mistral_news", lambda: fetch_mistral_news(since)),
         ("github_trending", lambda: fetch_github_trending()),
     ]
     all_items: list[dict] = []

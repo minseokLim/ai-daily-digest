@@ -9,8 +9,8 @@ description: Daily AI news digest — summarizes the last 24 hours of AI news fr
 
 ## 전제 (cloud environment)
 
-- **Network access**: Full (또는 Custom 에 hn.algolia.com / export.arxiv.org / huggingface.co / anthropic.com / openai.com / deepmind.google / ai.meta.com / mistral.ai 포함).
-- **환경변수 `SLACK_WEBHOOK_URL`**: Slack Incoming Webhook URL 을 environment variables 에 등록해야 함. config.json 에는 webhook 을 넣지 않음.
+- **Network access**: Full (또는 Custom 에 hn.algolia.com / export.arxiv.org / huggingface.co / openai.com / deepmind.google / www.anthropic.com / ai.meta.com / mistral.ai 포함).
+- **환경변수 `SLACK_BOT_TOKEN` + `SLACK_CHANNEL_ID`**: Slack App Bot Token (`xoxb-...`, `chat:write` scope 필요) 와 대상 채널 ID 를 environment variables 에 등록. config.json 에 넣지 않음. Incoming Webhook 은 더 이상 사용하지 않음 — 스레드 답글을 위해 `chat.postMessage` API 가 필요해서.
 - **Python**: 3.10+, stdlib only. 별도 패키지 설치 불필요.
 
 ## 전체 흐름 (Orchestration)
@@ -21,7 +21,7 @@ description: Daily AI news digest — summarizes the last 24 hours of AI news fr
    5개 소스에서 지난 24시간 항목을 모아 JSON 파일로 저장.
 2. **요약 (Summarize)** — Claude 가 `/tmp/ai-digest-raw.json` 을 읽고, 아래 "요약 포맷" 규칙에 따라 마크다운 요약을 `/tmp/ai-digest-summary.md` 에 작성.
 3. **전송 (Send)** — `python3 .claude/skills/ai-daily-digest/scripts/send.py /tmp/ai-digest-summary.md`
-   `SLACK_WEBHOOK_URL` 로 POST.
+   채널에 한 줄짜리 헤드라인 (`🔥 오늘의 AI 소식 (YYYY-MM-DD)`) 을 먼저 게시하고, 해당 메시지의 스레드에 전체 요약을 답글로 붙임. 채널 공간을 적게 차지하도록.
 
 왜 중간 단계를 Claude 가 하나요? 요약은 소스 간 중복·우선순위 판단이 중요해 LLM 이 결정론 스크립트보다 훨씬 잘합니다. 수집·전송처럼 반복적·결정론적인 작업만 스크립트로 뺐습니다.
 
@@ -58,7 +58,7 @@ description: Daily AI news digest — summarizes the last 24 hours of AI news fr
 | 1 | Hacker News | `https://hn.algolia.com/api/v1/search_by_date` | AI 관련 키워드로 필터, points ≥ 50 |
 | 2 | arXiv cs.AI/cs.LG/cs.CL | `http://export.arxiv.org/api/query` | 지난 24시간 제출분 |
 | 3 | HuggingFace Daily Papers | `https://huggingface.co/api/daily_papers` | 공식 JSON 엔드포인트 |
-| 4 | 랩/회사 블로그 RSS | Anthropic, OpenAI, DeepMind, Meta AI, Mistral, HuggingFace | RSS/Atom |
+| 4 | 랩/회사 블로그 | OpenAI, DeepMind, HuggingFace (RSS/Atom) + Anthropic, Meta AI, Mistral (HTML/sitemap 스크래핑) | — |
 | 5 | GitHub Trending | `https://github.com/trending/python?since=daily` | HTML 스크래핑 |
 
 소스 하나가 네트워크 에러를 내도 나머지는 계속 수집 (graceful degradation).
@@ -118,14 +118,15 @@ _※ GitHub Trending 항목은 "지난 24시간 내 star 급증" 기준 (레포 
 
 ## 구성 파일
 
-- `config.json` — 수집 설정 (랩 블로그 피드 URL, HN 키워드, 최소 점수). **Slack webhook 은 여기에 넣지 않음** — 환경변수로 관리.
+- `config.json` — 수집 설정 (랩 블로그 피드 URL, HN 키워드, 최소 점수). **Slack 토큰/채널 ID 는 여기에 넣지 않음** — 환경변수로 관리.
 - `scripts/collect.py` — 5개 소스 수집.
-- `scripts/send.py` — Slack 전송 (`SLACK_WEBHOOK_URL` env var 사용).
+- `scripts/send.py` — Slack 전송 (`chat.postMessage` + thread). 환경변수 `SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID`.
 
 ## 실행 예 (수동 테스트)
 
 ```bash
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/XXX/YYY/ZZZ"
+export SLACK_BOT_TOKEN="xoxb-..."
+export SLACK_CHANNEL_ID="C0123ABCDEF"
 python3 .claude/skills/ai-daily-digest/scripts/collect.py --hours 24 --out /tmp/ai-digest-raw.json
 # → Claude 가 /tmp/ai-digest-raw.json 을 읽고 /tmp/ai-digest-summary.md 작성
 python3 .claude/skills/ai-daily-digest/scripts/send.py /tmp/ai-digest-summary.md --dry-run  # payload 확인
@@ -143,6 +144,8 @@ Routine prompt 예시:
 ## 트러블슈팅
 
 - 수집이 0건이면 요약/전송을 건너뛰고 Slack 에 "지난 24시간 동안 신규 항목이 없었습니다" 한 줄만 보냅니다.
-- HTTP 401/403 이 Slack 에서 떨어지면 webhook URL 이 회전됐거나 만료된 것입니다. Routine environment 의 `SLACK_WEBHOOK_URL` 환경변수 업데이트 필요.
+- Slack API 가 `invalid_auth` / `not_authed` 를 리턴하면 Bot Token 이 회전/만료됐거나 scope 가 부족한 것. Routine environment 의 `SLACK_BOT_TOKEN` 업데이트, App 의 OAuth scope 에 `chat:write` 있는지 확인.
+- `not_in_channel` 에러는 봇이 대상 채널에 초대되지 않았을 때. Slack 채널에서 `/invite @<botname>` 실행.
+- `channel_not_found` 는 `SLACK_CHANNEL_ID` 가 잘못된 것. `#name` 이 아니라 채널 ID (`C...` 형식) 를 써야 함.
 - arXiv 가 종종 느립니다. `collect.py` 는 소스별 타임아웃 15초, 실패 시 해당 소스만 스킵.
 - Routine cloud environment 에서 특정 도메인이 차단되면 environment 설정에서 network access level 을 **Full** 로 바꾸거나, **Custom** 에 해당 도메인을 추가하세요.

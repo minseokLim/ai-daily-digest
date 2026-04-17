@@ -7,7 +7,7 @@
 1. **Hacker News** — Algolia search-by-date API, AI 키워드 필터, 50pt 이상
 2. **arXiv** — cs.AI / cs.LG / cs.CL 최신 제출 논문
 3. **HuggingFace Daily Papers** — 공식 큐레이션 API
-4. **랩 공식 블로그 RSS** — Anthropic / OpenAI / DeepMind / Meta / Mistral / HuggingFace
+4. **랩 공식 블로그** — OpenAI / DeepMind / HuggingFace (RSS) + Anthropic / Meta AI / Mistral (HTML 스크래핑 — RSS 미제공)
 5. **GitHub Trending** — Python daily trending 중 AI 관련 레포
 
 WebSearch 는 의도적으로 사용하지 않습니다. SEO/AI-generated 뉴스 블로그가 가상 모델명(예: "Claude Mythos 5", "Nemotron 3 Super" 등)을 섞어 넣어 trending 을 탈취하는 사례가 자주 보여, 1차 소스만 신뢰합니다.
@@ -34,19 +34,22 @@ WebSearch 는 의도적으로 사용하지 않습니다. SEO/AI-generated 뉴스
 
 1. 이 repo 를 GitHub 에 push
 2. [claude.ai/code](https://claude.ai/code) 에서 cloud environment 생성 (network: Full 또는 Custom)
-3. 환경변수 `SLACK_WEBHOOK_URL` 등록
+3. 환경변수 `SLACK_BOT_TOKEN` + `SLACK_CHANNEL_ID` 등록
 4. Routine 생성, cron `0 0 * * *` (UTC — KST 9am)
 5. "Run now" 로 1회 수동 실행 → Slack 도착 확인
 
 ## 수동 실행 (로컬)
 
 ```bash
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/XXX/YYY/ZZZ"
+export SLACK_BOT_TOKEN="xoxb-..."      # Slack App Bot Token (chat:write scope 필요)
+export SLACK_CHANNEL_ID="C0123ABCDEF"  # 채널 ID (#name 아님)
 python3 .claude/skills/ai-daily-digest/scripts/collect.py --hours 24 --out /tmp/ai-digest-raw.json
 # → Claude 또는 직접 /tmp/ai-digest-summary.md 작성
 python3 .claude/skills/ai-daily-digest/scripts/send.py /tmp/ai-digest-summary.md --dry-run  # 먼저 payload 확인
 python3 .claude/skills/ai-daily-digest/scripts/send.py /tmp/ai-digest-summary.md
 ```
+
+Slack 에는 한 줄 헤드라인 (`🔥 오늘의 AI 소식 (YYYY-MM-DD)`) 이 채널에 올라가고, 전체 요약은 그 메시지의 스레드에 답글로 붙습니다. Slack App 설정은 [SETUP.md 부록 A](./SETUP.md#부록-a--slack-app-생성--토큰-획득) 참고.
 
 Python 3.10+.
 

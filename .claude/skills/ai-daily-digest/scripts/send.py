@@ -1,98 +1,229 @@
 #!/usr/bin/env python3
 """
-AI Daily Digest — Slack Sender
+AI Daily Digest — Slack Sender (chat.postMessage + Block Kit + threading)
 
-Reads a markdown summary file and posts it to the Slack Incoming Webhook.
+Posts a short headline to the channel, then drops a Block Kit–formatted
+summary as a reply in that message's thread. Block Kit gives proper header
+styles, dividers, and blockquote indentation so the thread is scannable
+instead of a wall of plain text.
 
-Webhook URL resolution order:
-  1. --webhook CLI flag (highest priority, for ad-hoc overrides)
-  2. SLACK_WEBHOOK_URL environment variable (recommended for Routines)
-  3. slack_webhook_url in config.json (fallback for local dev only)
+Requires a Slack App with a Bot Token (xoxb-...) that has the `chat:write`
+scope AND is a member of the target channel (`/invite @<botname>` in Slack).
 
-In Claude Code Routines, set SLACK_WEBHOOK_URL in the cloud environment's
-Environment variables. Don't commit the webhook URL to config.json or any
-other file in the repo.
+Required env vars (set these in the Routine's cloud environment):
+  - SLACK_BOT_TOKEN   — xoxb-... Bot User OAuth Token
+  - SLACK_CHANNEL_ID  — target channel ID (e.g. C0123ABCDEF, NOT the #name)
 
-Slack mrkdwn supports a subset of markdown: *bold*, _italic_, ~strike~,
-`code`, ```code block```, and <URL|text> links. We pass the body through
-mostly as-is — the summarizer is expected to follow that dialect.
+CLI flags override env vars when given. Do NOT commit either value.
+
+Why chat.postMessage instead of Incoming Webhook: webhooks don't return the
+message `ts`, so we can't thread a reply to the message we just posted.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.request
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
+SLACK_API = "https://slack.com/api/chat.postMessage"
 
 
-def resolve_webhook(cli_webhook: str | None, config_path: Path) -> str:
-    if cli_webhook:
-        return cli_webhook.strip()
-    env_val = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
-    if env_val:
-        return env_val
-    try:
-        config = json.loads(config_path.read_text())
-    except FileNotFoundError:
-        return ""
-    return (config.get("slack_webhook_url") or "").strip()
-
-
-def post_to_slack(webhook_url: str, text: str) -> tuple[int, str]:
-    payload = json.dumps({
-        "text": text,
+def post_chat_message(token: str, channel: str, text: str,
+                      blocks: list | None = None,
+                      thread_ts: str | None = None) -> dict:
+    payload: dict = {
+        "channel": channel,
+        "text": text,  # fallback for notifications and clients without Block Kit
         "unfurl_links": False,
         "unfurl_media": False,
-    }).encode("utf-8")
+    }
+    if blocks:
+        payload["blocks"] = blocks
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
     req = urllib.request.Request(
-        webhook_url,
-        data=payload,
-        headers={"Content-Type": "application/json; charset=utf-8"},
+        SLACK_API,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         body = resp.read().decode("utf-8", errors="replace")
-        return resp.status, body
+    data = json.loads(body)
+    if not data.get("ok"):
+        raise RuntimeError(f"Slack API error: {data.get('error', 'unknown')} (full: {data})")
+    return data
+
+
+def extract_date(summary: str) -> str:
+    """Pull YYYY-MM-DD from the summary's '(YYYY-MM-DD)' header; fall back to today KST."""
+    m = re.search(r"\((\d{4}-\d{2}-\d{2})\)", summary[:500])
+    if m:
+        return m.group(1)
+    return datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+
+
+# ---------- markdown -> Block Kit ----------
+
+_HEADER_RE = re.compile(r"^\*(?P<emoji>[🔥📘📰🧠⚙️✨]*)\s*(?P<title>[^*]+?)\s*\*(?:\s*\([^)]+\))?\s*$")
+_ITEM_RE = re.compile(r"^•\s*\*(?P<title>.+?)\*\s*—\s*(?P<url>https?://\S+)\s*$")
+_CONTEXT_LINE_RE = re.compile(r"^_(?P<text>.+)_\s*$")
+
+
+def _flush_item(blocks: list, title: str, url: str, body_lines: list[str]) -> None:
+    # Section block: title as bold link + body as blockquote lines
+    title_line = f"*<{url}|{title}>*"
+    if body_lines:
+        body = "\n".join(f"> {line}" for line in body_lines)
+        text = f"{title_line}\n{body}"
+    else:
+        text = title_line
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": text},
+    })
+
+
+def markdown_to_blocks(summary: str) -> list[dict]:
+    """Parse the SKILL.md-format summary into Slack Block Kit blocks.
+
+    Known input shape (see SKILL.md):
+      *🔥 오늘의 핵심* (YYYY-MM-DD)
+
+      • *title* — url
+         body line 1
+         body line 2
+
+      *📘 주목할 만한 소식*
+      • ...
+
+      ---
+      _footer_
+    """
+    blocks: list[dict] = []
+    cur_title: str | None = None
+    cur_url: str | None = None
+    cur_body: list[str] = []
+    context_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal cur_title, cur_url, cur_body
+        if cur_title and cur_url:
+            _flush_item(blocks, cur_title, cur_url, cur_body)
+        cur_title = cur_url = None
+        cur_body = []
+
+    for raw in summary.splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue  # collapse blank lines; structure comes from block types
+
+        # Section header: *🔥 ...* or *📘 ...*
+        hm = _HEADER_RE.match(line.strip())
+        if hm and hm.group("emoji"):
+            flush()
+            header_text = f"{hm.group('emoji')} {hm.group('title')}".strip()
+            blocks.append({
+                "type": "header",
+                "text": {"type": "plain_text", "text": header_text, "emoji": True},
+            })
+            continue
+
+        # Item start: • *title* — url
+        im = _ITEM_RE.match(line.strip())
+        if im:
+            flush()
+            cur_title = im.group("title").strip()
+            cur_url = im.group("url").strip()
+            continue
+
+        # Divider line
+        if line.strip() == "---":
+            flush()
+            blocks.append({"type": "divider"})
+            continue
+
+        # Context line (italic _..._)
+        cm = _CONTEXT_LINE_RE.match(line.strip())
+        if cm:
+            flush()
+            context_lines.append(cm.group("text").strip())
+            continue
+
+        # Otherwise: body line for the current item (strip leading whitespace)
+        if cur_title:
+            cur_body.append(line.strip())
+
+    flush()
+
+    if context_lines:
+        blocks.append({
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": "_" + line + "_"} for line in context_lines
+            ],
+        })
+
+    return blocks
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("summary_file", help="Path to the markdown summary to send")
-    parser.add_argument("--config", type=str, default=str(CONFIG_PATH))
-    parser.add_argument("--webhook", type=str, default=None, help="Override webhook URL (beats env + config)")
+    parser.add_argument("--token", type=str, default=None, help="Override SLACK_BOT_TOKEN")
+    parser.add_argument("--channel", type=str, default=None, help="Override SLACK_CHANNEL_ID")
     parser.add_argument("--dry-run", action="store_true", help="Print payload, do not POST")
     args = parser.parse_args()
 
-    webhook = resolve_webhook(args.webhook, Path(args.config))
-    if not webhook or "REPLACE_ME" in webhook:
-        print(
-            "ERROR: no Slack webhook URL found.\n"
-            "  Set SLACK_WEBHOOK_URL env var (recommended),\n"
-            "  or pass --webhook, or add slack_webhook_url to config.json (local dev).",
-            file=sys.stderr,
-        )
-        return 2
+    token = (args.token or os.environ.get("SLACK_BOT_TOKEN", "")).strip()
+    channel = (args.channel or os.environ.get("SLACK_CHANNEL_ID", "")).strip()
 
     body = Path(args.summary_file).read_text().strip()
     if not body:
         print("ERROR: summary file is empty", file=sys.stderr)
         return 2
 
+    date_str = extract_date(body)
+    headline = f"🔥 오늘의 AI 소식 ({date_str})"
+    blocks = markdown_to_blocks(body)
+
     if args.dry_run:
         print("--- DRY RUN ---")
-        print(body)
-        print("--- (would POST above to Slack webhook) ---")
+        print(f"[parent] channel={channel or '(unset)'} text={headline!r}")
+        print(f"[thread reply] {len(blocks)} blocks, {len(body)} chars fallback text")
+        print(json.dumps(blocks, ensure_ascii=False, indent=2))
+        print("--- (would POST parent then thread reply with blocks) ---")
         return 0
 
-    status, resp = post_to_slack(webhook, body)
-    if status >= 400:
-        print(f"Slack returned {status}: {resp}", file=sys.stderr)
+    if not token or not token.startswith("xoxb-"):
+        print("ERROR: SLACK_BOT_TOKEN missing or not a Bot User token (expected xoxb-...).",
+              file=sys.stderr)
+        return 2
+    if not channel:
+        print("ERROR: SLACK_CHANNEL_ID missing. Use the channel ID (e.g. C0123ABCDEF), "
+              "not the #name.", file=sys.stderr)
+        return 2
+
+    try:
+        parent = post_chat_message(token, channel, headline)
+        thread_ts = parent["ts"]
+        post_chat_message(token, channel, body, blocks=blocks, thread_ts=thread_ts)
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
         return 1
-    print(f"OK ({status}): {resp}")
+    except Exception as e:
+        print(f"ERROR: HTTP/network failure: {e}", file=sys.stderr)
+        return 1
+
+    print(f"OK: posted parent ts={thread_ts} + thread reply ({len(blocks)} blocks) to {channel}")
     return 0
 
 
