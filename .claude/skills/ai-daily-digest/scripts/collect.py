@@ -442,8 +442,15 @@ def main() -> int:
         print(f"[{name}] {len(items)} items in {dt:.1f}s")
         all_items.extend(items)
 
+    now_utc = datetime.now(timezone.utc)
+    # report_date: the human-facing date the digest represents. KST, since the
+    # routine targets Korean readers and fires at 09:00 KST. Using UTC here
+    # produced off-by-one headlines whenever the routine ran before 09:00 KST
+    # (== before 00:00 UTC), so we pin it to KST explicitly.
+    report_date = now_utc.astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
     output = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": now_utc.isoformat(),
+        "report_date": report_date,
         "lookback_hours": args.hours,
         "stats": stats,
         "items": all_items,

@@ -67,7 +67,7 @@ description: Daily AI news digest — summarizes the last 24 hours of AI news fr
 
 **다음 템플릿을 그대로 사용하세요.** 이모지·볼드·제목 위계를 바꾸지 마세요. Slack mrkdwn 렌더링에 맞춰져 있습니다.
 
-`{YYYY-MM-DD}` 는 **반드시 raw JSON 의 `generated_at` 필드** 에서 날짜 부분을 그대로 꺼내 쓰세요. KST 로 변환할 필요 없이 UTC 날짜 그대로 사용합니다 (예: `generated_at: "2026-04-18T00:30:00+00:00"` → `2026-04-18`). Routine 이 KST 09:00 에 돌 때 UTC 는 그날 00:00 부근이라 사실상 같은 날짜입니다. 모델의 내부 시계/추측/학습 컷오프 날짜를 쓰지 마세요 — 반드시 파일에서 읽어오세요.
+`{YYYY-MM-DD}` 는 **반드시 raw JSON 의 `report_date` 필드** 를 그대로 복사하세요 (collect.py 가 KST 기준 오늘 날짜로 세팅해 둠). 모델의 내부 시계/추측/학습 컷오프 날짜를 쓰지 마세요. `generated_at` (UTC) 에서 직접 날짜를 뽑지도 마세요 — 한국 시간 자정~오전 9시 사이에 실행되면 전날 UTC 날짜가 나와 헤드라인이 하루 뒤처집니다.
 
 ```
 *🔥 오늘의 핵심* ({YYYY-MM-DD})
