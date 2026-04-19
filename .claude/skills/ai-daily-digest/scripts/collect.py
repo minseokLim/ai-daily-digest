@@ -42,6 +42,15 @@ USER_AGENT = "Mozilla/5.0 (compatible; ai-daily-digest/1.0; +https://github.com/
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 
+# Per-source fetch error counter. Populated by fetchers when an HTTP call fails;
+# surfaced in the raw JSON and the Slack footer so "0 items because fetch failed"
+# is visibly distinct from "0 items because the 24h window is empty".
+_ERRORS: dict[str, int] = {}
+
+
+def _record_error(source: str) -> None:
+    _ERRORS[source] = _ERRORS.get(source, 0) + 1
+
 
 # ---------- helpers ----------
 
@@ -97,16 +106,23 @@ def fetch_hackernews(since: datetime, keywords: list[str], min_points: int) -> l
     seen: dict[str, dict] = {}
     since_ts = int(since.timestamp())
     for kw in keywords:
+        # numericFilters contains '>', '=', ',' which are safe per RFC 3986 but
+        # strict WAFs/proxies on some cloud egress paths reject them unencoded
+        # with HTTP 400. Always percent-encode the whole filter value.
+        numeric_filters = urllib.parse.quote(
+            f"created_at_i>{since_ts},points>={min_points}"
+        )
         url = (
             "https://hn.algolia.com/api/v1/search_by_date"
             f"?query={urllib.parse.quote(kw)}"
-            f"&tags=story&numericFilters=created_at_i>{since_ts},points>={min_points}"
+            f"&tags=story&numericFilters={numeric_filters}"
             "&hitsPerPage=30"
         )
         try:
             data = _json_get(url)
         except Exception as e:
             print(f"  [hn:{kw}] fetch error: {e}", file=sys.stderr)
+            _record_error("hackernews")
             continue
         for hit in data.get("hits", []):
             oid = hit.get("objectID")
@@ -141,6 +157,7 @@ def fetch_arxiv(since: datetime) -> list[dict]:
         raw = _http_get(url)
     except Exception as e:
         print(f"  [arxiv] fetch error: {e}", file=sys.stderr)
+        _record_error("arxiv")
         return []
     ns = {"a": "http://www.w3.org/2005/Atom"}
     root = ET.fromstring(raw)
@@ -171,6 +188,7 @@ def fetch_huggingface_papers() -> list[dict]:
         data = _json_get("https://huggingface.co/api/daily_papers")
     except Exception as e:
         print(f"  [hf] fetch error: {e}", file=sys.stderr)
+        _record_error("huggingface")
         return []
     items: list[dict] = []
     for entry in data[:30]:
@@ -201,11 +219,13 @@ def fetch_lab_blogs(feeds: list[dict], since: datetime) -> list[dict]:
             raw = _http_get(feed["url"])
         except Exception as e:
             print(f"  [blog:{feed['name']}] fetch error: {e}", file=sys.stderr)
+            _record_error("lab_blogs")
             continue
         try:
             root = ET.fromstring(raw)
         except ET.ParseError as e:
             print(f"  [blog:{feed['name']}] parse error: {e}", file=sys.stderr)
+            _record_error("lab_blogs")
             continue
         # Handle both RSS 2.0 and Atom
         for entry in root.iter():
@@ -267,6 +287,7 @@ def fetch_anthropic_news(since: datetime) -> list[dict]:
         html = _http_get("https://www.anthropic.com/news").decode("utf-8", errors="replace")
     except Exception as e:
         print(f"  [blog:Anthropic] fetch error: {e}", file=sys.stderr)
+        _record_error("anthropic_news")
         return []
     items: list[dict] = []
     seen: set[str] = set()
@@ -308,6 +329,7 @@ def fetch_meta_blog(since: datetime) -> list[dict]:
         html = _http_get("https://ai.meta.com/blog/").decode("utf-8", errors="replace")
     except Exception as e:
         print(f"  [blog:Meta AI] fetch error: {e}", file=sys.stderr)
+        _record_error("meta_blog")
         return []
     items: list[dict] = []
     seen: set[str] = set()
@@ -350,11 +372,13 @@ def fetch_mistral_news(since: datetime) -> list[dict]:
         raw = _http_get("https://mistral.ai/sitemap.xml")
     except Exception as e:
         print(f"  [blog:Mistral] fetch error: {e}", file=sys.stderr)
+        _record_error("mistral_news")
         return []
     try:
         root = ET.fromstring(raw)
     except ET.ParseError as e:
         print(f"  [blog:Mistral] sitemap parse error: {e}", file=sys.stderr)
+        _record_error("mistral_news")
         return []
     ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
     candidates: list[tuple[str, str]] = []  # (url, lastmod_iso)
@@ -376,6 +400,7 @@ def fetch_mistral_news(since: datetime) -> list[dict]:
             page = _http_get(url).decode("utf-8", errors="replace")
         except Exception as e:
             print(f"  [blog:Mistral:{url}] fetch error: {e}", file=sys.stderr)
+            _record_error("mistral_news")
             continue
         tm = re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', page)
         if not tm:
@@ -400,6 +425,7 @@ def fetch_github_trending() -> list[dict]:
         html = _http_get("https://github.com/trending/python?since=daily").decode("utf-8", errors="replace")
     except Exception as e:
         print(f"  [gh] fetch error: {e}", file=sys.stderr)
+        _record_error("github_trending")
         return []
     items: list[dict] = []
     # Each repo block contains <h2 class="h3 lh-condensed"> with an <a href="/owner/repo">
@@ -479,11 +505,14 @@ def main() -> int:
         "report_date": report_date,
         "lookback_hours": args.hours,
         "stats": stats,
+        "errors": dict(_ERRORS),
         "items": all_items,
     }
     Path(args.out).write_text(json.dumps(output, ensure_ascii=False, indent=2))
     print(f"\nWrote {len(all_items)} total items to {args.out}")
     print(f"Per-source breakdown: {stats}")
+    if _ERRORS:
+        print(f"Per-source errors: {dict(_ERRORS)}")
     return 0
 
 

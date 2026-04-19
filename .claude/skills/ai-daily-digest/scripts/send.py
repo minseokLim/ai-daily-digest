@@ -201,18 +201,26 @@ _STATS_LABELS: list[tuple[str, str]] = [
 ]
 
 
-def load_stats(raw_json_path: str) -> dict | None:
-    """Return stats dict from raw JSON, or None if file missing / unreadable."""
+def load_stats_and_errors(raw_json_path: str) -> tuple[dict | None, dict]:
+    """Return (stats, errors) from raw JSON. errors defaults to {} if absent."""
     try:
         data = json.loads(Path(raw_json_path).read_text())
     except Exception:
-        return None
-    stats = data.get("stats")
-    return stats if isinstance(stats, dict) else None
+        return None, {}
+    stats = data.get("stats") if isinstance(data.get("stats"), dict) else None
+    errors = data.get("errors") if isinstance(data.get("errors"), dict) else {}
+    return stats, errors
 
 
-def format_stats_line(stats: dict) -> str:
-    parts = [f"{label} {stats.get(key, 0)}" for key, label in _STATS_LABELS]
+def format_stats_line(stats: dict, errors: dict | None = None) -> str:
+    """Format per-source counts, appending ⚠️ when a source had fetch errors —
+    so a genuine empty-window 0 is visibly different from a silently-broken 0."""
+    errors = errors or {}
+    parts = []
+    for key, label in _STATS_LABELS:
+        n = stats.get(key, 0)
+        mark = "⚠️" if errors.get(key, 0) > 0 else ""
+        parts.append(f"{label} {n}{mark}")
     return "📊 수집: " + " · ".join(parts)
 
 
@@ -249,10 +257,11 @@ def main() -> int:
     blocks = markdown_to_blocks(body)
 
     # Append per-source collection counts so silent scraper failures become visible
-    # in every Slack thread (e.g. "Anthropic 0" showing up for days = broken scraper).
-    stats = load_stats(args.raw_json)
+    # in every Slack thread. Error-count marker (⚠️) distinguishes "0 items because
+    # fetch failed" from "0 items because the 24h window was empty".
+    stats, errors = load_stats_and_errors(args.raw_json)
     if stats:
-        append_stats_context(blocks, format_stats_line(stats))
+        append_stats_context(blocks, format_stats_line(stats, errors))
 
     if args.dry_run:
         print("--- DRY RUN ---")
