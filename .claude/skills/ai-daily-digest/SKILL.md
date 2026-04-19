@@ -94,14 +94,17 @@ _※ GitHub Trending 항목은 "지난 24시간 내 star 급증" 기준 (레포 
 수집된 항목 중 아래 티어에 해당하는 것만 후보로 삼습니다. 정량 임계값은 raw JSON 의 `extra` 필드를 직접 확인하고 **반드시 지킬 것**. LLM (너) 의 주관 판단은 "후보 중 단순 마케팅·재포스트 제외" 같은 최소한의 필터링에만 쓰세요.
 
 1. **랩 공식 발표** — `source == "lab_blog"` (Anthropic / OpenAI / DeepMind / HuggingFace / Meta / Mistral). 윈도우 내 게시물은 모두 후보. 단, 단순 이벤트 공지·채용 글·튜토리얼 재포스트는 제외.
-2. **HN 고참여도** — `source == "hackernews"` AND `extra.points >= 200`. (collect.py 는 50점 컷이지만, 요약엔 200점 이상만 올린다.)
-3. **HF Daily Papers 상위** — `source == "huggingface"` AND `extra.upvotes >= 20`.
+2. **HF Daily Papers 상위** — `source == "huggingface"` AND `extra.upvotes >= 20`. 연구자 큐레이션된 1차 연구물.
+3. **HN 고참여도** — `source == "hackernews"` AND `extra.points >= 200`. 커뮤니티 토론·뉴스. (collect.py 는 50점 컷이지만, 요약엔 200점 이상만 올린다.)
 4. **arXiv 주요 논문** — `source == "arxiv"`. 신규 foundation model, 의미 있는 벤치마크 개선, 재현 가능한 기법 위주. 단순 증분 실험·서베이 제외.
 5. **GitHub Trending** — `source == "github_trending"` AND `extra.stars_today >= 200`.
 
-### 랭킹 · 중복 제거 · 건수
+티어 2 (HF) 가 3 (HN) 보다 위인 이유: HF Daily Papers 는 연구자 큐레이션된 1차 연구, HN 은 오피니언·블로그 포함 커뮤니티 시그널. 개발자에게 큐레이션된 연구 쪽이 보통 더 값어치 있음.
+
+### 랭킹 · 다양성 · 건수
 
 - 후보를 **티어 1 → 5 순** 으로 정렬. 동일 티어 내에서는 정량 신호 (points / upvotes / stars_today) 내림차순.
+- **다양성 상한**: 최종 선정에서 같은 `source` 값 (`lab_blog` / `huggingface` / `hackernews` / `arxiv` / `github_trending`) 은 **최대 2건** 까지만. 3건째부터는 해당 소스를 건너뛰고 다음 후보로 진행 — 논문 4개가 톱을 차지하거나 HN 오피니언이 연달아 쌓이는 걸 방지.
 - 같은 사건이 여러 소스에 나오면 **상위 티어의 URL** 로 1개 항목으로 합친다 (예: Anthropic 공식 블로그 + 같은 내용의 HN 토론 → Anthropic URL 만 사용, HN 링크는 버림).
 - **최대 5건.** 기준 통과 항목이 5개 미만이면 부족한 대로 게시 — 억지로 채우지 말 것.
 - 통과 항목이 **2건 미만** 이면 임계값을 절반으로 완화해 재선정: HN points ≥ 100, HF upvotes ≥ 10, GitHub stars_today ≥ 100. 그래도 2건 미만이면 요약을 생략하고 "⚠️ AI Daily Digest — 오늘은 게시 기준을 넘은 항목이 없습니다." 한 줄로 대체.
