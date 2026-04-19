@@ -252,7 +252,9 @@ def fetch_anthropic_news(since: datetime) -> list[dict]:
         if slug in seen:
             continue
         block = m.group(2)
-        title_match = re.search(r'<h2[^>]*>([^<]+)</h2>', block) or \
+        # Anthropic re-themed /news in Apr 2026: titles moved from <h2> to <h4 class="headline-6 ...">.
+        # Match any heading level to survive future tweaks.
+        title_match = re.search(r'<h[1-6][^>]*>([^<]+)</h[1-6]>', block) or \
                       re.search(r'<span[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</span>', block)
         time_match = re.search(r'<time[^>]*>([^<]+)</time>', block)
         if not title_match or not time_match:
