@@ -24,6 +24,7 @@ import re
 import sys
 import time
 import traceback
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -33,7 +34,11 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_TIMEOUT = 15
-USER_AGENT = "ai-daily-digest/1.0 (+https://github.com/anthropic-cowork)"
+# Browser-identifying UA. Plain "tool/version" strings get filtered by some WAFs
+# on shared cloud egress IPs — especially for arXiv and HN Algolia. The
+# "Mozilla/5.0 (compatible; ...)" form is the convention crawlers like Googlebot
+# use; it passes most simple bot filters while still identifying us honestly.
+USER_AGENT = "Mozilla/5.0 (compatible; ai-daily-digest/1.0; +https://github.com/minseokLim/ai-daily-digest)"
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 
@@ -41,9 +46,28 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 # ---------- helpers ----------
 
 def _http_get(url: str, timeout: int = DEFAULT_TIMEOUT) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    """GET with one retry on transient network errors.
+
+    A single connection hiccup used to zero out an entire source (HN's
+    15 keyword fan-out is the usual victim). Retry once on timeout /
+    URLError / 5xx. Never retry on 4xx — those are deterministic.
+    """
+    last_err: Exception | None = None
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            if 400 <= e.code < 500:
+                raise
+            last_err = e
+        except (TimeoutError, urllib.error.URLError, ConnectionError) as e:
+            last_err = e
+        if attempt == 0:
+            time.sleep(1.5)
+    assert last_err is not None
+    raise last_err
 
 
 def _json_get(url: str, timeout: int = DEFAULT_TIMEOUT) -> Any:

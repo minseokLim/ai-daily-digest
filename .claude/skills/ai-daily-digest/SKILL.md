@@ -81,7 +81,7 @@ description: Daily AI news digest — summarizes the last 24 hours of AI news fr
 ... (최대 5건)
 
 ---
-_출처: HN / arXiv / HF Papers / Lab Blogs / GitHub Trending — 윈도우: 지난 24시간_
+_출처: HN / arXiv / HF Papers / 랩 블로그 (Anthropic · OpenAI · DeepMind · Meta · Mistral · HuggingFace) / GitHub Trending — 윈도우: 지난 24시간_
 _※ GitHub Trending 항목은 "지난 24시간 내 star 급증" 기준 (레포 생성일 아님)_
 ```
 
