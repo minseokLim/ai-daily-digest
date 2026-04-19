@@ -1,7 +1,4 @@
 {
-  "lookback_hours": 24,
-  "lang": "ko",
-  "audience": "developers (client/backend/ML)",
   "lab_blog_feeds": [
     {"name": "OpenAI", "url": "https://openai.com/blog/rss.xml"},
     {"name": "Google DeepMind", "url": "https://deepmind.google/blog/rss.xml"},

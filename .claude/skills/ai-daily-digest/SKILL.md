@@ -1,6 +1,6 @@
 ---
 name: ai-daily-digest
-description: Daily AI news digest — summarizes the last 24 hours of AI news from Hacker News, arXiv, HuggingFace Daily Papers, top lab blogs (Anthropic/OpenAI/DeepMind/Meta/Mistral/HuggingFace), and GitHub Trending, then posts a Korean developer-focused summary to Slack via Incoming Webhook. Use this skill whenever the user asks for a daily/morning AI digest, wants to keep up with AI news, asks "what happened in AI today/yesterday", wants to post an AI news summary to a Slack channel, or runs a scheduled AI briefing. Trigger for phrases like "AI 소식", "AI 다이제스트", "오늘 AI 뉴스", "AI daily", "morning AI brief", even if Slack is not explicitly mentioned.
+description: Daily AI news digest — summarizes the last 24 hours of AI news from Hacker News, arXiv, HuggingFace Daily Papers, top lab blogs (Anthropic/OpenAI/DeepMind/Meta/Mistral/HuggingFace), and GitHub Trending, then posts a Korean developer-focused summary to Slack as a short channel headline + threaded Block Kit reply (via chat.postMessage). Use this skill whenever the user asks for a daily/morning AI digest, wants to keep up with AI news, asks "what happened in AI today/yesterday", wants to post an AI news summary to a Slack channel, or runs a scheduled AI briefing. Trigger for phrases like "AI 소식", "AI 다이제스트", "오늘 AI 뉴스", "AI daily", "morning AI brief", even if Slack is not explicitly mentioned.
 ---
 
 # AI Daily Digest

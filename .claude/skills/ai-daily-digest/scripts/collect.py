@@ -52,6 +52,32 @@ def _record_error(source: str) -> None:
     _ERRORS[source] = _ERRORS.get(source, 0) + 1
 
 
+# When an HN submission's URL points to one of these hosts, we re-classify the
+# item as `lab_blog` so the summarizer's tier system treats it as an authoritative
+# primary source (tier 1), not a community signal (tier 3). Covers the common
+# case where our lab scraper missed a post but HN surfaced the canonical URL.
+_LAB_HOST_TO_NAME: dict[str, str] = {
+    "anthropic.com": "Anthropic",
+    "www.anthropic.com": "Anthropic",
+    "openai.com": "OpenAI",
+    "www.openai.com": "OpenAI",
+    "deepmind.google": "DeepMind",
+    "www.deepmind.com": "DeepMind",
+    "ai.meta.com": "Meta AI",
+    "mistral.ai": "Mistral",
+    "www.mistral.ai": "Mistral",
+    "huggingface.co": "HuggingFace",
+}
+
+
+def _lab_name_for_url(url: str) -> str | None:
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+    except Exception:
+        return None
+    return _LAB_HOST_TO_NAME.get(host)
+
+
 # ---------- helpers ----------
 
 def _http_get(url: str, timeout: int = DEFAULT_TIMEOUT) -> bytes:
@@ -129,19 +155,40 @@ def fetch_hackernews(since: datetime, keywords: list[str], min_points: int) -> l
             if not oid or oid in seen:
                 continue
             link = hit.get("url") or f"https://news.ycombinator.com/item?id={oid}"
-            seen[oid] = {
-                "source": "hackernews",
-                "title": hit.get("title") or "(no title)",
-                "url": link,
-                "published_at": hit.get("created_at"),
-                "summary": None,
-                "extra": {
-                    "points": hit.get("points"),
-                    "num_comments": hit.get("num_comments"),
-                    "hn_url": f"https://news.ycombinator.com/item?id={oid}",
-                    "matched_keyword": kw,
-                },
-            }
+            hn_url = f"https://news.ycombinator.com/item?id={oid}"
+            lab = _lab_name_for_url(link)
+            if lab:
+                # HN surfaced a canonical lab-blog URL — promote to `lab_blog`
+                # so the summarizer treats it as a tier-1 primary source even
+                # when our direct lab scraper missed it (the Apr 2026 case
+                # where Anthropic HTML markup changed silently).
+                seen[oid] = {
+                    "source": "lab_blog",
+                    "title": hit.get("title") or "(no title)",
+                    "url": link,
+                    "published_at": hit.get("created_at"),
+                    "summary": None,
+                    "extra": {
+                        "lab": lab,
+                        "via_hn": True,
+                        "hn_points": hit.get("points"),
+                        "hn_url": hn_url,
+                    },
+                }
+            else:
+                seen[oid] = {
+                    "source": "hackernews",
+                    "title": hit.get("title") or "(no title)",
+                    "url": link,
+                    "published_at": hit.get("created_at"),
+                    "summary": None,
+                    "extra": {
+                        "points": hit.get("points"),
+                        "num_comments": hit.get("num_comments"),
+                        "hn_url": hn_url,
+                        "matched_keyword": kw,
+                    },
+                }
     items = sorted(seen.values(), key=lambda x: x["extra"].get("points") or 0, reverse=True)
     return items[:25]
 
