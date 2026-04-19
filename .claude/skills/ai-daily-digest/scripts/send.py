@@ -109,18 +109,23 @@ def _flush_item(blocks: list, title: str, url: str, body_lines: list[str]) -> No
 def markdown_to_blocks(summary: str) -> list[dict]:
     """Parse the SKILL.md-format summary into Slack Block Kit blocks.
 
-    Known input shape (see SKILL.md):
-      *🔥 오늘의 핵심* (YYYY-MM-DD)
+    Expected input shape (see SKILL.md) — single flat list, no section
+    headers (the parent channel message already carries the date):
 
       • *title* — url
          body line 1
          body line 2
 
-      *📘 주목할 만한 소식*
-      • ...
+      • *title* — url
+         ...
 
       ---
-      _footer_
+      _footer line 1_
+      _footer line 2_
+
+    The parser also tolerates legacy `*<emoji> <title>*` header lines
+    (renders them as Block Kit header blocks) so older summary shapes
+    don't break if the prompt regresses.
     """
     blocks: list[dict] = []
     cur_title: str | None = None
