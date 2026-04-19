@@ -63,8 +63,22 @@ def post_chat_message(token: str, channel: str, text: str,
     return data
 
 
-def extract_date(summary: str) -> str:
-    """Pull YYYY-MM-DD from the summary's '(YYYY-MM-DD)' header; fall back to today KST."""
+def extract_date(summary: str, raw_json_path: str | None = None) -> str:
+    """Resolve the YYYY-MM-DD for the parent headline.
+
+    Priority: raw JSON's `report_date` (KST, pinned by collect.py) >
+    a `(YYYY-MM-DD)` token in the summary body > today KST. Preferring
+    raw JSON means the summary body no longer needs a redundant date
+    header — collect.py is already the single source of truth.
+    """
+    if raw_json_path:
+        try:
+            data = json.loads(Path(raw_json_path).read_text())
+            report_date = data.get("report_date")
+            if isinstance(report_date, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", report_date):
+                return report_date
+        except Exception:
+            pass
     m = re.search(r"\((\d{4}-\d{2}-\d{2})\)", summary[:500])
     if m:
         return m.group(1)
@@ -230,7 +244,7 @@ def main() -> int:
         print("ERROR: summary file is empty", file=sys.stderr)
         return 2
 
-    date_str = extract_date(body)
+    date_str = extract_date(body, args.raw_json)
     headline = f"🔥 오늘의 AI 소식 ({date_str})"
     blocks = markdown_to_blocks(body)
 
