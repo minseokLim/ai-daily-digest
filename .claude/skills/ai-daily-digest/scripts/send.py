@@ -175,11 +175,50 @@ def markdown_to_blocks(summary: str) -> list[dict]:
     return blocks
 
 
+_STATS_LABELS: list[tuple[str, str]] = [
+    ("hackernews", "HN"),
+    ("arxiv", "arXiv"),
+    ("huggingface", "HF"),
+    ("lab_blogs", "LabRSS"),
+    ("anthropic_news", "Anthropic"),
+    ("meta_blog", "Meta"),
+    ("mistral_news", "Mistral"),
+    ("github_trending", "GH"),
+]
+
+
+def load_stats(raw_json_path: str) -> dict | None:
+    """Return stats dict from raw JSON, or None if file missing / unreadable."""
+    try:
+        data = json.loads(Path(raw_json_path).read_text())
+    except Exception:
+        return None
+    stats = data.get("stats")
+    return stats if isinstance(stats, dict) else None
+
+
+def format_stats_line(stats: dict) -> str:
+    parts = [f"{label} {stats.get(key, 0)}" for key, label in _STATS_LABELS]
+    return "📊 수집: " + " · ".join(parts)
+
+
+def append_stats_context(blocks: list[dict], stats_line: str) -> None:
+    """Append stats_line as an italic element on the trailing context block
+    (or add a new context block if none exists)."""
+    element = {"type": "mrkdwn", "text": "_" + stats_line + "_"}
+    if blocks and blocks[-1].get("type") == "context":
+        blocks[-1]["elements"].append(element)
+    else:
+        blocks.append({"type": "context", "elements": [element]})
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("summary_file", help="Path to the markdown summary to send")
     parser.add_argument("--token", type=str, default=None, help="Override SLACK_BOT_TOKEN")
     parser.add_argument("--channel", type=str, default=None, help="Override SLACK_CHANNEL_ID")
+    parser.add_argument("--raw-json", type=str, default="/tmp/ai-digest-raw.json",
+                        help="Path to raw JSON; its 'stats' dict is appended as a footer context line")
     parser.add_argument("--dry-run", action="store_true", help="Print payload, do not POST")
     args = parser.parse_args()
 
@@ -194,6 +233,12 @@ def main() -> int:
     date_str = extract_date(body)
     headline = f"🔥 오늘의 AI 소식 ({date_str})"
     blocks = markdown_to_blocks(body)
+
+    # Append per-source collection counts so silent scraper failures become visible
+    # in every Slack thread (e.g. "Anthropic 0" showing up for days = broken scraper).
+    stats = load_stats(args.raw_json)
+    if stats:
+        append_stats_context(blocks, format_stats_line(stats))
 
     if args.dry_run:
         print("--- DRY RUN ---")
